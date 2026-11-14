@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SEARCH SYSTEM</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--c:#00d4ff;--red:#ff1a1a}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#000;overflow:hidden;font-family:Orbitron,"Segoe UI",sans-serif;color:var(--c);-webkit-user-select:none;user-select:none}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;filter:brightness(.55) contrast(1.1) saturate(.85)}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+.fx{position:fixed;inset:0;pointer-events:none;
+background:radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.75) 100%),
+repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px)}
+header{position:fixed;left:0;right:0;top:0;display:flex;justify-content:space-between;
+padding:max(3vh,env(safe-area-inset-top)) 4vw 0;font-size:clamp(16px,3.2vw,42px);letter-spacing:.04em;text-shadow:0 0 10px rgba(0,212,255,.7)}
+#log{position:fixed;left:4vw;bottom:max(4vh,env(safe-area-inset-bottom));font-size:clamp(11px,1.8vw,22px);line-height:1.75;text-shadow:0 0 8px rgba(0,212,255,.6)}
+#log div{animation:in .25s ease-out}
+#log .red{color:var(--red);text-shadow:0 0 8px rgba(255,26,26,.7)}
+@keyframes in{from{opacity:0;transform:translateX(-8px)}}
+#hint{position:fixed;right:4vw;bottom:max(4vh,env(safe-area-inset-bottom));display:flex;gap:10px}
+#hint button{font:inherit;font-size:clamp(10px,1.4vw,16px);color:var(--c);background:rgba(0,20,30,.45);border:1px solid var(--c);padding:10px 14px;letter-spacing:.04em;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#hint button.on{background:rgba(0,212,255,.3);box-shadow:0 0 12px rgba(0,212,255,.7)}
+@media (prefers-reduced-motion:reduce){#log div{animation:none}}
+</style>
+</head>
+<body>
+<video id="v" playsinline muted autoplay></video>
+<canvas id="cv"></canvas>
+<div class="fx"></div>
+<header><div>SEARCH SYSTEM</div><div id="clock"></div></header>
+<div id="log"></div>
+<div id="hint"><button id="bp">PERSON [SPACE]</button><button id="bb">BOOK [B]</button><button id="bc">CAMERA [C]</button></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js" crossorigin="anonymous"></script>
+<script>
+const $=id=>document.getElementById(id);
+const video=$('v'),cv=$('cv'),ctx=cv.getContext('2d'),logEl=$('log');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const mk=()=>document.createElement('canvas');
+const sc=mk(),fc=mk(),oc=mk(),scc=mk();  // silhouette(mask res), fill, outline, scan layer (screen res)
+let W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
+let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
+const CYAN='0,212,255';
+
+function log(t,red){
+  const d=document.createElement('div');d.textContent='[System] '+t;if(red)d.className='red';
+  logEl.appendChild(d);while(logEl.children.length>13)logEl.firstChild.remove();
+}
+function tick(){const n=new Date(),p=x=>String(x).padStart(2,'0');
+  $('clock').textContent=`${n.getFullYear()}.${p(n.getMonth()+1)}.${p(n.getDate())}  ${p(n.getHours())}:${p(n.getMinutes())}`}
+setInterval(tick,1000);tick();
+
+function resize(){
+  W=cv.width=innerWidth;H=cv.height=innerHeight;
+  [fc,oc,scc].forEach(c=>{c.width=W;c.height=H});
+}
+addEventListener('resize',resize);resize();
+
+function coverRect(){
+  const vw=video.videoWidth||16,vh=video.videoHeight||9,s=Math.max(W/vw,H/vh);
+  return {x:(W-vw*s)/2,y:(H-vh*s)/2,w:vw*s,h:vh*s};
+}
+
+// ---------- segmentation result -> silhouette, outline ----------
+function onResults(r){
+  const m=r.segmentationMask,mw=m.width,mh=m.height;
+  const tmp=onResults.t||(onResults.t=mk());tmp.width=mw;tmp.height=mh;
+  const tc=tmp.getContext('2d',{willReadFrequently:true});
+  tc.clearRect(0,0,mw,mh);tc.drawImage(m,0,0,mw,mh);
+  const src=tc.getImageData(0,0,mw,mh),out=tc.createImageData(mw,mh);
+  let x0=mw,y0=mh,x1=0,y1=0,n=0;
+  for(let y=0;y<mh;y++)for(let x=0;x<mw;x++){
+    const i=(y*mw+x)*4;
+    if(src.data[i+3]>140){
+      out.data[i]=0;out.data[i+1]=212;out.data[i+2]=255;out.data[i+3]=255;
+      n++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+    }
+  }
+  sc.width=mw;sc.height=mh;sc.getContext('2d').putImageData(out,0,0);
+  rect=coverRect();
+  if(n<mw*mh*0.02){bbox=null;oc.getContext('2d').clearRect(0,0,W,H);return}
+  bbox={x0:rect.x+x0/mw*rect.w,x1:rect.x+x1/mw*rect.w,y0:rect.y+y0/mh*rect.h,y1:rect.y+y1/mh*rect.h};
+  const f=fc.getContext('2d');f.clearRect(0,0,W,H);f.imageSmoothingEnabled=true;
+  f.drawImage(sc,rect.x,rect.y,rect.w,rect.h);
+  const o=oc.getContext('2d');o.clearRect(0,0,W,H);o.globalCompositeOperation='source-over';
+  const t=3;
+  for(let a=0;a<8;a++){o.drawImage(fc,Math.cos(a*Math.PI/4)*t,Math.sin(a*Math.PI/4)*t)}
+  o.globalCompositeOperation='destination-out';o.drawImage(fc,0,0);o.globalCompositeOperation='source-over';
+}
+
+// ---------- render ----------
+function reticle(){
+  const cx=(bbox.x0+bbox.x1)/2,cy=bbox.y0+(bbox.y1-bbox.y0)*.72,s=Math.max(24,(bbox.x1-bbox.x0)*.16);
+  ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();
+  const k=s*.28;
+  [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([a,b])=>{
+    const px=cx+a*s,py=cy+b*s;ctx.moveTo(px-a*k,py);ctx.lineTo(px,py);ctx.lineTo(px,py-b*k);});
+  ctx.moveTo(cx+s+8,cy+s);ctx.lineTo(cx+s*4,cy+s);ctx.lineTo(cx+s*5.2,cy-s*.2);ctx.stroke();
+}
+function render(now){
+  ctx.clearRect(0,0,W,H);
+  if(mode==='book'&&state>=1)drawBooks(now);
+  if(mode==='person'&&state>=1&&bbox){
+    ctx.save();ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=12;ctx.drawImage(oc,0,0);ctx.restore();
+    reticle();
+    if(state===2){
+      const p=Math.min((now-scanT0)/3200,1),tri=p*2%2,k=tri<1?tri:2-tri;
+      const h=bbox.y1-bbox.y0,y=bbox.y0+h*k,s=scc.getContext('2d');
+      s.globalCompositeOperation='source-over';s.clearRect(0,0,W,H);s.drawImage(fc,0,0);
+      s.globalCompositeOperation='source-atop';
+      s.fillStyle=`rgba(${CYAN},.22)`;s.fillRect(0,0,W,H);
+      s.strokeStyle=`rgba(${CYAN},.35)`;s.lineWidth=1;s.beginPath();
+      for(let gy=Math.floor(bbox.y0/10)*10;gy<bbox.y1;gy+=10){s.moveTo(bbox.x0,gy);s.lineTo(bbox.x1,gy)}
+      for(let gx=Math.floor(bbox.x0/10)*10;gx<bbox.x1;gx+=10){s.moveTo(gx,bbox.y0);s.lineTo(gx,bbox.y1)}
+      s.stroke();
+      const g=s.createLinearGradient(0,y-50,0,y+50);
+      g.addColorStop(0,'rgba(200,255,255,0)');g.addColorStop(.5,'rgba(200,255,255,.95)');g.addColorStop(1,'rgba(200,255,255,0)');
+      s.fillStyle=g;s.fillRect(0,y-50,W,100);
+      ctx.drawImage(scc,0,0);
+      ctx.save();ctx.strokeStyle='#bff';ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=16;ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(bbox.x0-30,y);ctx.lineTo(bbox.x1+30,y);ctx.stroke();ctx.restore();
+      ctx.fillStyle=`rgb(${CYAN})`;ctx.font='600 14px Orbitron,sans-serif';
+      ctx.fillText(`SCAN ${String(Math.floor(p*100)).padStart(3,'0')}%`,bbox.x1+36,y-8);
+    }
+  }
+  requestAnimationFrame(render);
+}
+// ---- book target display: square corner brackets + leader line + label (like the reference image) ----
+let tgtRaw=null,cur=null,lastSeen=0;
+function pickTarget(){                       // the detected book closest to the screen center becomes the target
+  if(!books.length)return;
+  let best=null,bd=1e9;
+  books.forEach(b=>{const d=Math.hypot(b.x+b.w/2-W/2,b.y+b.h/2-H/2);if(d<bd){bd=d;best=b}});
+  const S=Math.max(48,Math.max(best.w,best.h)*1.2);   // always a square (side = longer side of the book + margin)
+  tgtRaw={cx:best.x+best.w/2,cy:best.y+best.h/2,S};lastSeen=performance.now();
+}
+const hasTarget=()=>tgtRaw&&performance.now()-lastSeen<600;
+function drawBooks(now){
+  if(!hasTarget()){cur=null;return}
+  if(!cur)cur={...tgtRaw};else for(const k in tgtRaw)cur[k]+=(tgtRaw[k]-cur[k])*.35;
+  const {cx,cy,S}=cur,x0=cx-S/2,y0=cy-S/2,x1=cx+S/2,y1=cy+S/2;
+  const a=S*.11,u=Math.max(S,160)/255;       // u: scale for leader line / label (keeps them readable for small books)
+  ctx.save();ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(2,2.5*u);ctx.shadowColor='#fff';ctx.shadowBlur=8;
+  ctx.beginPath();
+  [[x0,y0,1,1],[x1,y0,-1,1],[x1,y1,-1,-1],[x0,y1,1,-1]].forEach(([x,y,p,q])=>{ctx.moveTo(x+p*a,y);ctx.lineTo(x,y);ctx.lineTo(x,y+q*a)});
+  const px=x1+203*u,ex=px+98*u,ey=cy-98*u;
+  ctx.moveTo(x1,cy);ctx.lineTo(px,cy);ctx.lineTo(ex,ey);ctx.stroke();
+  const fs=Math.max(14,Math.min(36,34*u));
+  ctx.font=`500 ${fs}px Orbitron,sans-serif`;ctx.fillStyle='#fff';
+  const lab='MISSION TARGET',tw=ctx.measureText(lab).width;
+  ctx.fillText(lab,Math.max(8,Math.min(W-tw-8,ex-tw/2)),Math.max(fs+4,ey-20*u));
+  ctx.restore();
+  if(state===2){
+    const p=Math.min((now-scanT0)/3200,1),tri=p*2%2,k=tri<1?tri:2-tri,y=y0+S*k;
+    ctx.save();ctx.beginPath();ctx.rect(x0,y0,S,S);ctx.clip();
+    ctx.fillStyle=`rgba(${CYAN},.22)`;ctx.fillRect(x0,y0,S,S);
+    ctx.strokeStyle=`rgba(${CYAN},.35)`;ctx.lineWidth=1;ctx.beginPath();
+    for(let gy=y0;gy<y1;gy+=10){ctx.moveTo(x0,gy);ctx.lineTo(x1,gy)}
+    for(let gx=x0;gx<x1;gx+=10){ctx.moveTo(gx,y0);ctx.lineTo(gx,y1)}
+    ctx.stroke();
+    const g=ctx.createLinearGradient(0,y-30,0,y+30);
+    g.addColorStop(0,'rgba(200,255,255,0)');g.addColorStop(.5,'rgba(200,255,255,.95)');g.addColorStop(1,'rgba(200,255,255,0)');
+    ctx.fillStyle=g;ctx.fillRect(x0,y-30,S,60);ctx.restore();
+    ctx.save();ctx.strokeStyle='#bff';ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=14;ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(x0-10,y);ctx.lineTo(x1+10,y);ctx.stroke();ctx.restore();
+    ctx.fillStyle=`rgb(${CYAN})`;ctx.font='600 14px Orbitron,sans-serif';
+    ctx.fillText(`SCAN ${String(Math.floor(p*100)).padStart(3,'0')}%`,x0,y1+22);
+  }
+}
+function loop(){
+  if(video.readyState>=2&&!busy&&state>=1){
+    if(mode==='person'&&ready){
+      busy=true;seg.send({image:video}).catch(()=>{}).finally(()=>{busy=false});
+    }else if(mode==='book'&&cocoModel){
+      busy=true;
+      cocoModel.detect(video,20,0.15).then(ps=>{
+        const r=coverRect(),s=r.w/video.videoWidth;
+        books=ps.filter(q=>q.class==='book').map(q=>({x:r.x+q.bbox[0]*s,y:r.y+q.bbox[1]*s,w:q.bbox[2]*s,h:q.bbox[3]*s}));pickTarget();
+      }).catch(()=>{}).finally(()=>{busy=false});
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---------- scan sequence ----------
+async function runScan(){
+  state=2;scanT0=performance.now();
+  log('Scanning ID card...');
+  await sleep(3200);
+  if(!bbox){log('Scan failed. No target in frame.',true);state=1;return}
+  log('Scan successful.');await sleep(500);
+  log('Authenticating...');await sleep(900);
+  log('Authentication complete.');await sleep(500);
+  log('ID scan complete.');await sleep(600);
+  if(Math.random()<.5){
+    log('Mission target detected.');await sleep(600);
+    log('Mission update.');await sleep(600);
+    log('Start route guide.');
+  }else{
+    log('Illegal activity detected.',true);await sleep(700);
+    log('Mission update.');
+  }
+  await sleep(500);log('Ready to scan.');state=1;
+}
+async function runBookScan(){
+  state=2;scanT0=performance.now();
+  log('Scanning book...');
+  await sleep(3200);
+  if(!hasTarget()){log('Scan failed. No book in frame.',true);state=1;return}
+  log('Book scan successful.');await sleep(500);
+  log('Reading barcode...');await sleep(900);
+  log('Searching inventory...');await sleep(900);
+  log('Stock found.');await sleep(600);
+  log('Mission update.');await sleep(600);
+  log('Start route guide.');await sleep(500);
+  log('Ready to scan.');state=1;
+}
+const loadScript=u=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.crossOrigin='anonymous';s.onload=res;s.onerror=rej;document.head.appendChild(s)});
+async function loadBook(){
+  log('Loading book detection module...');
+  try{
+    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
+    cocoModel=await cocoSsd.load({base:'lite_mobilenet_v2'});
+    log('Book detection module ready.');return true;
+  }catch(e){log('Book detection module offline.',true);return false}
+}
+async function press(m){
+  if(state===2||loading)return;
+  if(mode!==m){
+    if(m==='person'&&!ready){log('Detection module not ready.',true);return}
+    if(m==='book'&&!cocoModel){loading=true;const ok=await loadBook();loading=false;if(!ok)return}
+    mode=m;state=1;
+    $('bp').classList.toggle('on',m==='person');$('bb').classList.toggle('on',m==='book');
+    log(m==='person'?'Target silhouette locked.':'Book detection active.');log('Ready to scan.');
+  }else if(state===1){m==='person'?runScan():runBookScan()}
+}
+addEventListener('keydown',e=>{
+  if(e.repeat)return;
+  if(e.code==='Space'){e.preventDefault();press('person')}
+  else if(e.code==='KeyB')press('book');
+  else if(e.code==='KeyC')nextCam();
+});
+addEventListener('pointerdown',()=>press('person'));
+[['bp','person'],['bb','book']].forEach(([id,m])=>{
+  const b=$(id);b.addEventListener('pointerdown',e=>{e.stopPropagation();press(m)});
+});
+$('bc').addEventListener('pointerdown',e=>{e.stopPropagation();nextCam()});
+
+// ---------- camera ----------
+let cams=[],camIdx=0;
+async function startCam(id){
+  if(video.srcObject)video.srcObject.getTracks().forEach(t=>t.stop());
+  const v={width:{ideal:1280},height:{ideal:720}};
+  if(id)v.deviceId={exact:id};else v.facingMode='environment';
+  video.srcObject=await navigator.mediaDevices.getUserMedia({video:v,audio:false});
+  await video.play();
+}
+async function listCams(){
+  cams=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+}
+async function nextCam(){
+  if(state===2)return;
+  await listCams();
+  if(cams.length<2){log('No other camera found.',true);return}
+  camIdx=(camIdx+1)%cams.length;
+  try{await startCam(cams[camIdx].deviceId);log('Camera: '+(cams[camIdx].label||'#'+camIdx));}
+  catch(e){log('Camera switch failed.',true)}
+}
+
+// ---------- boot ----------
+(async()=>{
+  log('System online.');
+  try{
+    await startCam();await listCams();
+    const cur=video.srcObject.getVideoTracks()[0].getSettings().deviceId;
+    camIdx=Math.max(0,cams.findIndex(c=>c.deviceId===cur));
+    const ip=cams.findIndex(c=>/iphone/i.test(c.label));
+    if(ip>=0&&ip!==camIdx){camIdx=ip;await startCam(cams[ip].deviceId)}
+    log('Camera linked: '+(cams[camIdx]&&cams[camIdx].label||'default'));
+    log(cams.length+' camera(s) found. Press C to switch.');
+  }catch(e){log('Camera access denied.',true)}
+  if(typeof SelfieSegmentation==='undefined'){log('Detection module offline.',true)}
+  else{
+    log('Loading detection module...');
+    try{
+      seg=new SelfieSegmentation({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${f}`});
+      seg.setOptions({modelSelection:1});seg.onResults(onResults);
+      await seg.initialize();ready=true;log('Detection module ready.');log('Space: person / B: book.');
+    }catch(e){log('Detection module offline.',true)}
+  }
+  requestAnimationFrame(render);requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
