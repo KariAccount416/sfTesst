@@ -25,58 +25,52 @@ padding:max(4vh,env(safe-area-inset-top)) 2.3vw 0;font-size:clamp(12px,1.5vw,40p
 #hint button{font:inherit;font-size:clamp(10px,1.4vw,16px);color:var(--c);background:rgba(0,20,30,.45);border:1px solid var(--c);padding:10px 14px;letter-spacing:.04em;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #hint button.on{background:rgba(0,212,255,.3);box-shadow:0 0 12px rgba(0,212,255,.7)}
 @media (prefers-reduced-motion:reduce){#log div{animation:none}}
-
-/* ===== ALERT MODE ===== */
-body.alert{--c:#ff1a1a;color:#ff1a1a}
-body.alert header{text-shadow:0 0 14px rgba(255,26,26,.9)}
-body.alert #log{text-shadow:0 0 10px rgba(255,26,26,.8)}
-body.alert #hint button{color:#ff1a1a;border-color:#ff1a1a;background:rgba(40,0,0,.5)}
-body.alert #hint button.on{background:rgba(255,26,26,.35);box-shadow:0 0 14px rgba(255,26,26,.8)}
-body.alert .fx{
-  background:radial-gradient(ellipse at center,transparent 40%,rgba(40,0,0,.85) 100%),
-  repeating-linear-gradient(0deg,rgba(40,0,0,.25) 0 1px,transparent 1px 3px)}
+.gog #hint,.gog .fx{display:none}
 </style>
 </head>
 <body>
 <video id="v" playsinline muted autoplay></video>
 <canvas id="gl"></canvas><canvas id="cv"></canvas>
 <div class="fx"></div>
-<header><div>SEARCH SYSTEM</div><div id="clock"></div></header>
-<div id="log"></div>
-<div id="hint"><button id="bp">PERSON [SPACE]</button><button id="bb">BOOK [B]</button><button id="bc">CAMERA [C]</button></div>
+<div id="hint"><button id="bp">PERSON [SPACE]</button><button id="bb">BOOK [B]</button><button id="bc">CAMERA [C]</button><button id="bg">GOGGLE [G]</button></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js" crossorigin="anonymous"></script>
 <script>
 const $=id=>document.getElementById(id);
-const video=$('v'),cv=$('cv'),ctx=cv.getContext('2d'),logEl=$('log');
+const video=$('v'),cv=$('cv'),ctx=cv.getContext('2d');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const mk=()=>document.createElement('canvas');
-const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk();
-let W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false;
+const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContext('2d');  // silhouette(mask res), fill, outline, scan layer (screen res)
+let goggle=false,gDepth=.006,gSep=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
-const LENS_K=0.10,CA=0.025;
+const LENS_K=0.10,CA=0.025,GOG_K=0,GOG_CA=0.012;   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
 const CYAN='0,212,255';
-const RED ='255,26,26';
 
-/* ===== ALERT / GLITCH STATE ===== */
-let alertMode=false;
-let warnT0=0;          // when warning text started
-let glitchT0=0;        // when glitch burst started
-const WARN_DUR=3800;   // warning text visible (ms)
-const GLITCH_DUR=900;  // intense glitch duration (ms)
-
-function log(t,red){
-  const d=document.createElement('div');d.textContent='[System] '+t;if(red)d.className='red';
-  logEl.appendChild(d);while(logEl.children.length>13)logEl.firstChild.remove();
+const logs=[];
+function log(t,red){logs.push({t:'[System] '+t,red,b:performance.now()});if(logs.length>13)logs.shift()}
+try{document.fonts.load("500 20px Orbitron");document.fonts.load("400 20px 'Exo 2'")}catch(e){}
+try{const o=JSON.parse(localStorage.getItem('ss')||'{}');if(o.gDepth!=null)gDepth=o.gDepth;if(o.gSep!=null)gSep=o.gSep}catch(e){}
+function drawHud(now){      // header + log; in goggle mode: bigger text and pulled away from the lens edge
+  const c=hctx,g=goggle,k=g?1.6:1,fs=Math.max(12,W*.015*k),lf=Math.max(11,W*.011*k),lh=lf*1.75;
+  const px=W*(g?.09:.023),top=H*(g?.12:.04),bot=H*(g?.12:.03);
+  c.save();c.shadowColor='rgba(0,212,255,.7)';c.shadowBlur=10;c.fillStyle=`rgb(${CYAN})`;
+  c.font=`500 ${fs}px Orbitron,'Segoe UI',sans-serif`;c.textBaseline='top';
+  c.textAlign='left';c.fillText('SEARCH SYSTEM',px,top);
+  const n=new Date(),p2=x=>String(x).padStart(2,'0');
+  c.textAlign='right';c.fillText(`${n.getFullYear()}.${p2(n.getMonth()+1)}.${p2(n.getDate())}  ${p2(n.getHours())}:${p2(n.getMinutes())}`,W-px,top);
+  c.textAlign='left';c.textBaseline='alphabetic';c.font=`400 ${lf}px 'Exo 2','Segoe UI',sans-serif`;
+  logs.forEach((l,i)=>{
+    const t=Math.min(1,(now-l.b)/250),y=H-bot-(logs.length-1-i)*lh;
+    c.globalAlpha=t;c.fillStyle=l.red?'#ff1a1a':`rgb(${CYAN})`;c.shadowColor=l.red?'rgba(255,26,26,.7)':'rgba(0,212,255,.6)';
+    c.fillText(l.t,px-(1-t)*8,y);
+  });
+  c.restore();
 }
-function tick(){const n=new Date(),p=x=>String(x).padStart(2,'0');
-  $('clock').textContent=`${n.getFullYear()}.${p(n.getMonth()+1)}.${p(n.getDate())}  ${p(n.getHours())}:${p(n.getMinutes())}`}
-setInterval(tick,1000);tick();
-
 function resize(){
-  W=cv.width=innerWidth;H=cv.height=innerHeight;$('gl').width=W;$('gl').height=H;
-  [fc,oc,scc,ec].forEach(c=>{c.width=W;c.height=H});
+  W=Math.floor(innerWidth/(goggle?2:1));H=innerHeight;      // goggle mode: W = width of ONE eye view
+  cv.width=W;cv.height=H;$('gl').width=goggle?W*2:W;$('gl').height=H;
+  [fc,oc,scc,ec,hc].forEach(c=>{c.width=W;c.height=H});
 }
 addEventListener('resize',resize);resize();
 
@@ -93,11 +87,10 @@ function onResults(r){
   tc.clearRect(0,0,mw,mh);tc.drawImage(m,0,0,mw,mh);
   const src=tc.getImageData(0,0,mw,mh),out=tc.createImageData(mw,mh);
   let x0=mw,y0=mh,x1=0,y1=0,n=0;
-  const col = alertMode ? [255,26,26] : [0,212,255];
   for(let y=0;y<mh;y++)for(let x=0;x<mw;x++){
     const i=(y*mw+x)*4;
     if(src.data[i+3]>140){
-      out.data[i]=col[0];out.data[i+1]=col[1];out.data[i+2]=col[2];out.data[i+3]=255;
+      out.data[i]=0;out.data[i+1]=212;out.data[i+2]=255;out.data[i+3]=255;
       n++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
     }
   }
@@ -116,7 +109,7 @@ function onResults(r){
 // ---------- render ----------
 function reticle(){
   const cx=(bbox.x0+bbox.x1)/2,cy=bbox.y0+(bbox.y1-bbox.y0)*.72,s=Math.max(24,(bbox.x1-bbox.x0)*.16);
-  ctx.strokeStyle=alertMode?'#ff1a1a':'#fff';ctx.lineWidth=2;ctx.beginPath();
+  ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();
   const k=s*.28;
   [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([a,b])=>{
     const px=cx+a*s,py=cy+b*s;ctx.moveTo(px-a*k,py);ctx.lineTo(px,py);ctx.lineTo(px,py-b*k);});
@@ -125,7 +118,7 @@ function reticle(){
 const scanP=now=>Math.min(Math.max((now-scanT0)/3200,0),1);
 const NZ=Uint8Array.from({length:65536},()=>Math.random()*256);
 
-// ---- relief ("emboss") effect ----
+// ---- relief ("emboss") effect: directional derivative of the video, coloured green / cyan on a blue base ----
 function updateRelief(now){
   if(now-lastRel<66)return;lastRel=now;
   const rw=400,rh=Math.max(2,Math.round(rw*H/W)),N=rw*rh;
@@ -137,15 +130,9 @@ function updateRelief(now){
   rf=(rf+9973)&65535;
   for(let i=0;i<N;i++){
     const e=g[Math.min(i+rw+1,N-1)]-g[Math.max(i-rw-1,0)]+(NZ[(i*13+rf)&65535]-128)*.15,o=i*4;
-    if(alertMode){
-      if(e>12){d[o]=255;d[o+1]=80;d[o+2]=80;d[o+3]=235}
-      else if(e<-12){d[o]=180;d[o+1]=0;d[o+2]=0;d[o+3]=235}
-      else{d[o]=60;d[o+1]=0;d[o+2]=0;d[o+3]=150}
-    }else{
-      if(e>12){d[o]=110;d[o+1]=255;d[o+2]=110;d[o+3]=235}
-      else if(e<-12){d[o]=0;d[o+1]=225;d[o+2]=255;d[o+3]=235}
-      else{d[o]=0;d[o+1]=35;d[o+2]=120;d[o+3]=150}
-    }
+    if(e>12){d[o]=110;d[o+1]=255;d[o+2]=110;d[o+3]=235}
+    else if(e<-12){d[o]=0;d[o+1]=225;d[o+2]=255;d[o+3]=235}
+    else{d[o]=0;d[o+1]=35;d[o+2]=120;d[o+3]=150}
   }
   x.putImageData(im,0,0);
   const c=ec.getContext('2d');c.globalCompositeOperation='source-over';c.clearRect(0,0,W,H);
@@ -153,10 +140,9 @@ function updateRelief(now){
   c.globalCompositeOperation='destination-in';c.drawImage(fc,0,0);c.globalCompositeOperation='source-over';
 }
 
-// ---- centre UI ----
-function drawCenterUI(p,a){
-  const cx=W/2,cy=H/2,R=Math.min(H*.082,W*.14),r=R*.41,hs=55*Math.PI/180;
-  const col=alertMode?'rgb(255,60,60)':'rgb(70,222,235)';
+// ---- centre UI: shape never changes; low-opacity cyan fills in bright from both sides as p goes 0 -> 1 ----
+function drawCenterUI(p,a){const ctx=hctx;
+  const cx=W/2,cy=H/2,R=Math.min(H*.082,W*.14),r=R*.41,hs=55*Math.PI/180,col='rgb(70,222,235)';
   const path=()=>{
     ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
     ctx.moveTo(cx-r*Math.cos(hs),cy+r*Math.sin(hs));ctx.arc(cx,cy,r,Math.PI-hs,Math.PI+hs);
@@ -169,7 +155,7 @@ function drawCenterUI(p,a){
   };
   ctx.save();ctx.strokeStyle=col;ctx.lineWidth=R*.05;
   ctx.globalAlpha=a*.3;path();ctx.stroke();
-  const wd=R*1.6*(1-p);
+  const wd=R*1.6*(1-p);                       // un-filled band around the vertical centre line
   ctx.beginPath();ctx.rect(0,0,Math.max(0,cx-wd),H);ctx.rect(cx+wd,0,W,H);ctx.clip();
   ctx.globalAlpha=a;ctx.shadowColor=col;ctx.shadowBlur=12;path();ctx.stroke();
   ctx.restore();
@@ -184,11 +170,10 @@ function centerUI(now){
   if(a>0)drawCenterUI(p,a);
 }
 
-// ---- white square brackets + leader line + label ----
+// ---- white square brackets + leader line + label (la: label opacity 0..1) ----
 function drawMarker(cx,cy,S,lab,a,la){
   const x0=cx-S/2,y0=cy-S/2,x1=cx+S/2,y1=cy+S/2,ar=S*.11,u=Math.max(S,160)/255;
-  ctx.save();ctx.globalAlpha=a;ctx.strokeStyle=alertMode?'#ff3a3a':'#fff';ctx.lineWidth=Math.max(2,2.5*u);
-  ctx.shadowColor=alertMode?'#ff1a1a':'#fff';ctx.shadowBlur=8;
+  ctx.save();ctx.globalAlpha=a;ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(2,2.5*u);ctx.shadowColor='#fff';ctx.shadowBlur=8;
   ctx.beginPath();
   [[x0,y0,1,1],[x1,y0,-1,1],[x1,y1,-1,-1],[x0,y1,1,-1]].forEach(([x,y,p,q])=>{ctx.moveTo(x+p*ar,y);ctx.lineTo(x,y);ctx.lineTo(x,y+q*ar)});
   ctx.stroke();
@@ -196,14 +181,14 @@ function drawMarker(cx,cy,S,lab,a,la){
     ctx.globalAlpha=a*la;
     const px=x1+203*u,ex=px+98*u,ey=cy-98*u,fs=Math.max(12,Math.min(40,28*u));
     ctx.beginPath();ctx.moveTo(x1,cy);ctx.lineTo(px,cy);ctx.lineTo(ex,ey);ctx.stroke();
-    ctx.font=`500 ${fs}px Orbitron,sans-serif`;ctx.fillStyle=alertMode?'#ff3a3a':'#fff';
+    ctx.font=`500 ${fs}px Orbitron,sans-serif`;ctx.fillStyle='#fff';
     const tw=ctx.measureText(lab).width;
     ctx.fillText(lab,Math.max(8,Math.min(W-tw-8,ex-tw/2)),Math.max(fs+4,ey-24*u));
   }
   ctx.restore();
 }
 
-// ---- person scan ----
+// ---- person scan: relief effect revealed top->bottom; ID card marker stays until the person leaves the camera ----
 function drawPersonScan(now){
   const bw=bbox.x1-bbox.x0,bh=bbox.y1-bbox.y0;
   if(state===2){
@@ -211,7 +196,7 @@ function drawPersonScan(now){
     if(fade>0){
       updateRelief(now);
       ctx.save();ctx.globalAlpha=fade;ctx.beginPath();ctx.rect(0,0,W,ly);ctx.clip();ctx.drawImage(ec,0,0);ctx.restore();
-      if(p<1){ctx.save();ctx.strokeStyle=alertMode?'#ff6666':'#bff';ctx.shadowColor=`rgb(${alertMode?RED:CYAN})`;ctx.shadowBlur=16;ctx.lineWidth=2;
+      if(p<1){ctx.save();ctx.strokeStyle='#bff';ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=16;ctx.lineWidth=2;
         ctx.beginPath();ctx.moveTo(bbox.x0-30,ly);ctx.lineTo(bbox.x1+30,ly);ctx.stroke();ctx.restore()}
     }
   }
@@ -220,142 +205,45 @@ function drawPersonScan(now){
   if(!cardCur)cardCur=n;else for(const k in n)cardCur[k]+=(n[k]-cardCur[k])*.3;
   const t=Math.min(1,(now-cardT0)/400),S=cardCur.S*(1+(1-t)*.8);
   ctx.save();ctx.globalAlpha=t;ctx.translate(cardCur.cx,cardCur.cy);ctx.rotate(.05);
-  ctx.strokeStyle=alertMode?'#ff3a3a':'#fff';ctx.lineWidth=2.5;ctx.shadowColor=alertMode?'#ff1a1a':'#fff';ctx.shadowBlur=8;ctx.strokeRect(-cw/2,-ch/2,cw,ch);ctx.restore();
+  ctx.strokeStyle='#fff';ctx.lineWidth=2.5;ctx.shadowColor='#fff';ctx.shadowBlur=8;ctx.strokeRect(-cw/2,-ch/2,cw,ch);ctx.restore();
   drawMarker(cardCur.cx,cardCur.cy,S,'MISSION TARGET',t,labelT0?Math.min(1,(now-labelT0)/300):0);
 }
-
-/* ===== GLITCH + WARNING DRAW ===== */
-function drawGlitch(now){
-  const gt=now-glitchT0;
-  if(gt>GLITCH_DUR && !alertMode)return;          // only while active or during burst
-
-  const intensity = alertMode
-    ? (gt<GLITCH_DUR ? 1.0 : 0.25)                // strong burst then mild residual
-    : Math.max(0,1-gt/GLITCH_DUR);
-
-  if(intensity<=0)return;
-
-  // screen shake / shift
-  const sx=(Math.random()-0.5)*18*intensity;
-  const sy=(Math.random()-0.5)*12*intensity;
-  ctx.save();
-  ctx.translate(sx,sy);
-
-  // RGB channel split (simple 2D approximation)
-  if(Math.random()<0.7*intensity){
-    const off=Math.floor(8+Math.random()*14)*intensity;
-    ctx.globalCompositeOperation='lighter';
-    ctx.globalAlpha=0.35*intensity;
-    ctx.drawImage(cv,-off,0);          // red-ish shift
-    ctx.drawImage(cv, off,0);          // cyan-ish shift
-    ctx.globalCompositeOperation='source-over';
-    ctx.globalAlpha=1;
-  }
-
-  // block noise
-  const blocks=Math.floor(6+intensity*18);
-  for(let i=0;i<blocks;i++){
-    const bw=20+Math.random()*120;
-    const bh=8+Math.random()*40;
-    const bx=Math.random()*(W-bw);
-    const by=Math.random()*(H-bh);
-    ctx.fillStyle=`rgba(${150+Math.random()*105|0},${Math.random()*40|0},${Math.random()*40|0},${0.25+Math.random()*0.55})`;
-    ctx.fillRect(bx,by,bw,bh);
-    // occasional horizontal tear
-    if(Math.random()<0.3){
-      ctx.fillStyle=`rgba(255,40,40,${0.4*intensity})`;
-      ctx.fillRect(0,by,W,2+Math.random()*4);
-    }
-  }
-
-  // scanlines / static
-  if(Math.random()<0.5*intensity){
-    ctx.fillStyle=`rgba(255,0,0,${0.06*intensity})`;
-    for(let y=0;y<H;y+=3)if(Math.random()<0.3)ctx.fillRect(0,y,W,1);
-  }
-
-  ctx.restore();
-}
-
-function drawWarning(now){
-  if(!alertMode)return;
-  const age=now-warnT0;
-  if(age>WARN_DUR)return;
-
-  // fade in / out
-  let a=1;
-  if(age<300)a=age/300;
-  else if(age>WARN_DUR-600)a=Math.max(0,(WARN_DUR-age)/600);
-
-  const cx=W/2,cy=H/2;
-  ctx.save();
-  ctx.globalAlpha=a;
-
-  // dark red overlay pulse
-  const pulse=0.15+0.1*Math.sin(now/120);
-  ctx.fillStyle=`rgba(80,0,0,${pulse})`;
-  ctx.fillRect(0,0,W,H);
-
-  // main text
-  ctx.font=`700 ${Math.min(48,W*0.07)}px Orbitron,sans-serif`;
-  ctx.textAlign='center';
-  ctx.textBaseline='middle';
-  ctx.shadowColor='#ff0000';
-  ctx.shadowBlur=28;
-  ctx.fillStyle='#ff2222';
-  ctx.fillText('WARNING!',cx,cy-40);
-
-  ctx.font=`500 ${Math.min(28,W*0.042)}px Orbitron,sans-serif`;
-  ctx.shadowBlur=16;
-  ctx.fillStyle='#ff5555';
-  ctx.fillText("You've been found.",cx,cy+20);
-
-  // decorative lines
-  ctx.strokeStyle='#ff1a1a';
-  ctx.lineWidth=2;
-  ctx.beginPath();
-  ctx.moveTo(cx-180,cy-70);ctx.lineTo(cx+180,cy-70);
-  ctx.moveTo(cx-180,cy+55);ctx.lineTo(cx+180,cy+55);
-  ctx.stroke();
-
-  ctx.restore();
-}
-
 function render(now){
-  ctx.clearRect(0,0,W,H);
+  ctx.clearRect(0,0,W,H);hctx.clearRect(0,0,W,H);
   if(mode==='book'&&state>=1)drawBooks(now);
   if(mode==='person'){
-    if(cardT0&&state!==2&&now-lastPerson>600){cardT0=labelT0=0;cardCur=null;scanEndT=0}
+    if(cardT0&&state!==2&&now-lastPerson>600){cardT0=labelT0=0;cardCur=null;scanEndT=0}   // person left the camera
     if(state>=1&&bbox){
-      ctx.save();ctx.shadowColor=`rgb(${alertMode?RED:CYAN})`;ctx.shadowBlur=12;ctx.drawImage(oc,0,0);ctx.restore();
+      ctx.save();ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=12;ctx.drawImage(oc,0,0);ctx.restore();
       if(state===2||cardT0)drawPersonScan(now);else if(!scanned)reticle();
     }
   }
-  centerUI(now);
-
-  // glitch & warning on top
-  drawGlitch(now);
-  drawWarning(now);
-
+  centerUI(now);drawHud(now);
+  if(!gl)ctx.drawImage(hc,0,0);
   glDraw();
   requestAnimationFrame(render);
 }
 let started=false;
 function startLoops(){if(started)return;started=true;requestAnimationFrame(render);requestAnimationFrame(loop)}
 
-// ---- WebGL pass ----
+// ---- WebGL pass: pincushion + chromatic aberration; goggle mode renders side-by-side stereo with per-layer disparity ----
 const VS='attribute vec2 p;varying vec2 v;void main(){v=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
-const FS=`precision highp float;varying vec2 v;uniform sampler2D tv,to;uniform vec2 sc,vd;uniform float K,C;
+const FS=`precision highp float;varying vec2 v;uniform sampler2D tv,to,th;uniform vec2 sc,vd;uniform float K,C,eye,dw,dh,sp,vg;
 vec2 vuv(vec2 u){float k=max(sc.x/vd.x,sc.y/vd.y);vec2 sz=vd*k;return (u*sc-(sc-sz)*.5)/sz;}
 void main(){
   vec2 p=v*2.-1.;float r2=dot(p,p);vec2 d=p*(1.-K*r2);
-  vec2 ur=d*(1.+C*r2)*.5+.5,ug=d*.5+.5,ub=d*(1.-C*r2)*.5+.5;
-  vec4 a=texture2D(to,ur),b=texture2D(to,ug),c=texture2D(to,ub);
-  vec3 vid=vec3(texture2D(tv,vuv(ur)).r,texture2D(tv,vuv(ug)).g,texture2D(tv,vuv(ub)).b);
-  vid*=.55;vid=(vid-.5)*1.1+.5;float gr=dot(vid,vec3(.3,.59,.11));vid=mix(vec3(gr),vid,.85);
-  gl_FragColor=vec4(vid.r*(1.-a.a)+a.r,vid.g*(1.-b.a)+b.g,vid.b*(1.-c.a)+c.b,1.);
+  vec2 q=d*.5+.5,qr=d*(1.+C*r2)*.5+.5,qb=d*(1.-C*r2)*.5+.5;
+  vec2 o1=vec2(eye*sp,0.),o2=vec2(eye*(sp+dw),0.),o3=vec2(eye*(sp+dh),0.);
+  vec3 col=vec3(texture2D(tv,vuv(qr+o1)).r,texture2D(tv,vuv(q+o1)).g,texture2D(tv,vuv(qb+o1)).b);
+  col*=.55;col=(col-.5)*1.1+.5;float gr=dot(col,vec3(.3,.59,.11));col=mix(vec3(gr),col,.85);
+  vec4 a=texture2D(to,qr+o2),b=texture2D(to,q+o2),c=texture2D(to,qb+o2);
+  col=vec3(col.r*(1.-a.a)+a.r,col.g*(1.-b.a)+b.g,col.b*(1.-c.a)+c.b);
+  a=texture2D(th,qr+o3);b=texture2D(th,q+o3);c=texture2D(th,qb+o3);
+  col=vec3(col.r*(1.-a.a)+a.r,col.g*(1.-b.a)+b.g,col.b*(1.-c.a)+c.b);
+  col*=1.-vg*.55*smoothstep(.75,1.5,length(p));
+  gl_FragColor=vec4(col,1.);
 }`;
-let gl=null,uSc,uVd,uK,uC;
+let gl=null;const U={};
 function initGL(){
   try{
     gl=$('gl').getContext('webgl',{alpha:false,antialias:false});
@@ -363,33 +251,32 @@ function initGL(){
     const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pr);gl.useProgram(pr);
     const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
     const l=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
-    [['tv',0],['to',1]].forEach(([n,i])=>{
+    [['tv',0],['to',1],['th',2]].forEach(([n,i])=>{
       gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,gl.createTexture());
       [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T].forEach(w=>gl.texParameteri(gl.TEXTURE_2D,w,gl.CLAMP_TO_EDGE));
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
       gl.uniform1i(gl.getUniformLocation(pr,n),i);
     });
-    [uSc,uVd,uK,uC]=['sc','vd','K','C'].map(n=>gl.getUniformLocation(pr,n));
+    ['sc','vd','K','C','eye','dw','dh','sp','vg'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
-  }catch(e){
-    gl=null;$('gl').style.display='none';video.style.opacity=1;cv.style.display='block';
-  }
+  }catch(e){gl=null;$('gl').style.display='none';video.style.opacity=1;cv.style.display='block'}
 }
 function glDraw(){
   if(!gl)return;
-  gl.viewport(0,0,W,H);
   if(video.readyState>=2){gl.activeTexture(gl.TEXTURE0);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video)}
-  gl.activeTexture(gl.TEXTURE1);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
-  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,cv);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-  // stronger chromatic aberration while in alert
-  const ca = alertMode ? CA*3.5 : CA;
-  const k  = alertMode ? LENS_K*1.4 : LENS_K;
-  gl.uniform2f(uSc,W,H);gl.uniform2f(uVd,video.videoWidth||16,video.videoHeight||9);gl.uniform1f(uK,k);gl.uniform1f(uC,ca);
-  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
+  gl.activeTexture(gl.TEXTURE1);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,cv);
+  gl.activeTexture(gl.TEXTURE2);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hc);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+  gl.uniform2f(U.sc,W,H);gl.uniform2f(U.vd,video.videoWidth||16,video.videoHeight||9);
+  gl.uniform1f(U.K,goggle?GOG_K:LENS_K);gl.uniform1f(U.C,goggle?GOG_CA:CA);
+  gl.uniform1f(U.dw,gDepth*.5);gl.uniform1f(U.dh,gDepth);gl.uniform1f(U.sp,gSep);gl.uniform1f(U.vg,goggle?1:0);
+  const eyes=goggle?[-1,1]:[0];
+  eyes.forEach((e,i)=>{gl.viewport(i*W,0,W,H);gl.uniform1f(U.eye,e);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)});
 }
 initGL();
 
-// ---- book target ----
+// ---- book target: nearest detected book to the screen centre ----
 let tgtRaw=null,cur=null,lastSeen=0;
 function pickTarget(){
   if(!books.length)return;
@@ -478,33 +365,40 @@ async function press(m){
     log(m==='person'?'Target silhouette locked.':'Book detection active.');log('Ready to scan.');
   }else if(state===1){m==='person'?runScan():runBookScan()}
 }
-
-/* ===== X KEY TOGGLE ===== */
-function toggleAlert(){
-  alertMode=!alertMode;
-  document.body.classList.toggle('alert',alertMode);
-  if(alertMode){
-    warnT0=performance.now();
-    glitchT0=performance.now();
-    log('⚠ ALERT MODE ENGAGED',true);
-    log("WARNING! You've been found.",true);
-  }else{
-    log('Alert mode disengaged.');
-  }
-}
-
 addEventListener('keydown',e=>{
   if(e.repeat)return;
   if(e.code==='Space'){e.preventDefault();press('person')}
   else if(e.code==='KeyB')press('book');
   else if(e.code==='KeyC')nextCam();
-  else if(e.code==='KeyX'){e.preventDefault();toggleAlert()}
+  else if(e.code==='KeyG')setGoggle(!goggle);
+  else if(e.code==='BracketRight')adjust('depth',1);else if(e.code==='BracketLeft')adjust('depth',-1);
+  else if(e.code==='Period')adjust('sep',1);else if(e.code==='Comma')adjust('sep',-1);
 });
-addEventListener('pointerdown',()=>press('person'));
 [['bp','person'],['bb','book']].forEach(([id,m])=>{
   const b=$(id);b.addEventListener('pointerdown',e=>{e.stopPropagation();press(m)});
 });
 $('bc').addEventListener('pointerdown',e=>{e.stopPropagation();nextCam()});
+function setGoggle(on){
+  goggle=on;document.body.classList.toggle('gog',on);resize();
+  if(on){log('Goggle mode. Swipe up/down: UI depth, left/right: separation.');try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(e){}}
+  else log('Goggle mode off.');
+}
+function adjust(k,d){
+  if(k==='depth')gDepth=Math.min(.03,Math.max(0,gDepth+d*.001));else gSep=Math.min(.1,Math.max(-.1,gSep+d*.002));
+  try{localStorage.setItem('ss',JSON.stringify({gDepth,gSep}))}catch(e){}
+  log(k==='depth'?`UI depth ${Math.round(gDepth*1000)}`:`Separation ${Math.round(gSep*500)}`);
+}
+let sx=0,sy=0;
+addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY;if(!goggle)press('person')});
+addEventListener('pointerup',e=>{
+  if(!goggle)return;
+  const dx=e.clientX-sx,dy=e.clientY-sy;
+  if(Math.abs(dy)>40&&Math.abs(dy)>Math.abs(dx))adjust('depth',dy<0?1:-1);
+  else if(Math.abs(dx)>40)adjust('sep',dx>0?1:-1);
+  else press('person');
+});
+$('bg').addEventListener('pointerdown',e=>{e.stopPropagation();setGoggle(!goggle)});
+
 
 // ---------- camera ----------
 let cams=[],camIdx=0;
@@ -545,7 +439,7 @@ async function nextCam(){
     try{
       seg=new SelfieSegmentation({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${f}`});
       seg.setOptions({modelSelection:1});seg.onResults(onResults);
-      await seg.initialize();ready=true;log('Detection module ready.');log('Space: person / B: book / X: alert.');
+      await seg.initialize();ready=true;log('Detection module ready.');log('Space: person / B: book.');
     }catch(e){log('Detection module offline.',true)}
   }
   startLoops();
