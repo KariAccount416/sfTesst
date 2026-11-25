@@ -300,8 +300,9 @@ void main(){
   vec2 p=v*2.-1.;float r2=dot(p,p);vec2 d=p*(1.-K*r2);
   vec2 q=d*.5+.5,qr=d*(1.+C*r2)*.5+.5,qb=d*(1.-C*r2)*.5+.5;
   vec2 qru=d*(1.+Cu*r2)*.5+.5,qbu=d*(1.-Cu*r2)*.5+.5;
-  vec2 dH=p*(1.-Kh*r2),qH=dH*.5+.5,qHr=dH*(1.+Cu*r2)*.5+.5,qHb=dH*(1.-Cu*r2)*.5+.5;
   vec2 o1=vec2(eye*sp,0.),o2=vec2(eye*(sp+dw),0.),o3=vec2(eye*(sp+dh),0.);
+  vec2 pl=p+2.*o3;float rl=dot(pl,pl);          // HUD-local coordinates: origin = HUD centre (already shifted by its disparity)
+  vec2 dH=pl*(1.-Kh*rl),qH=dH*.5+.5,qHr=dH*(1.+Cu*rl)*.5+.5,qHb=dH*(1.-Cu*rl)*.5+.5;
   float rs=burst*.012;
   vec3 col=vec3(texture2D(tv,vuv(gli(qr+o1,.04)+vec2(rs,0.))).r,texture2D(tv,vuv(gli(q+o1,.04))).g,texture2D(tv,vuv(gli(qb+o1,.04)-vec2(rs,0.))).b);
   col*=.55;col=(col-.5)*1.1+.5;float gr=dot(col,vec3(.3,.59,.11));col=mix(vec3(gr),col,.85);
@@ -312,7 +313,7 @@ void main(){
     vec4 g=yel(texture2D(to,w2+vec2(.008+.02*burst,0.)))*burst,m=red(b);
     col=col*(1.-g.a)+g.rgb;col=col*(1.-m.a)+m.rgb;
   }else col=vec3(col.r*(1.-a.a)+a.r,col.g*(1.-b.a)+b.g,col.b*(1.-c.a)+c.b);
-  vec2 h1=hq(gli(qHr+o3,.1)),h2=hq(gli(qH+o3,.1)),h3=hq(gli(qHb+o3,.1));
+  vec2 h1=hq(gli(qHr,.1)),h2=hq(gli(qH,.1)),h3=hq(gli(qHb,.1));
   a=texture2D(th,h1)*inb(h1);b=texture2D(th,h2)*inb(h2);c=texture2D(th,h3)*inb(h3);
   if(fail>.5){
     vec2 hg=h2+vec2(.012+.03*burst,0.);
