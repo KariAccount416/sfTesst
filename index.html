@@ -41,10 +41,10 @@ const video=$('v'),cv=$('cv'),ctx=cv.getContext('2d');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const mk=()=>document.createElement('canvas');
 const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContext('2d');  // silhouette(mask res), fill, outline, scan layer (screen res)
-let goggle=false,gDepth=.006,gSep=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
+let goggle=false,gDepth=.004,gSep=0,EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
-const LENS_K=0.10,CA=0.025,GOG_K=0,GOG_CA=0.012;   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
+const LENS_K=0.10,CA=0.025,GOG_K=0,GOG_CA=0.012,GOG_FIT=.92;   // GOG_FIT: size of the 16:9 UI area inside each eye view (1 = as large as fits)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
 const CYAN='0,212,255';
 
 const logs=[];
@@ -52,8 +52,8 @@ function log(t,red){logs.push({t:'[System] '+t,red,b:performance.now()});if(logs
 try{document.fonts.load("500 20px Orbitron");document.fonts.load("400 20px 'Exo 2'")}catch(e){}
 try{const o=JSON.parse(localStorage.getItem('ss')||'{}');if(o.gDepth!=null)gDepth=o.gDepth;if(o.gSep!=null)gSep=o.gSep}catch(e){}
 function drawHud(now){      // header + log; in goggle mode: bigger text and pulled away from the lens edge
-  const c=hctx,g=goggle,k=g?1.6:1,fs=Math.max(12,W*.015*k),lf=Math.max(11,W*.011*k),lh=lf*1.75;
-  const px=W*(g?.09:.023),top=H*(g?.12:.04),bot=H*(g?.12:.03);
+  const W=HW,H=HH,c=hctx,g=goggle,k=g?1.6:1,fs=Math.max(12,W*.015*k),lf=Math.max(11,W*.011*k),lh=lf*1.75;
+  const px=W*(g?.04:.023),top=H*(g?.07:.04),bot=H*(g?.07:.03);
   c.save();c.shadowColor='rgba(0,212,255,.7)';c.shadowBlur=10;c.fillStyle=`rgb(${CYAN})`;
   c.font=`500 ${fs}px Orbitron,'Segoe UI',sans-serif`;c.textBaseline='top';
   c.textAlign='left';c.fillText('SEARCH SYSTEM',px,top);
@@ -68,9 +68,15 @@ function drawHud(now){      // header + log; in goggle mode: bigger text and pul
   c.restore();
 }
 function resize(){
-  W=Math.floor(innerWidth/(goggle?2:1));H=innerHeight;      // goggle mode: W = width of ONE eye view
-  cv.width=W;cv.height=H;$('gl').width=goggle?W*2:W;$('gl').height=H;
-  [fc,oc,scc,ec,hc].forEach(c=>{c.width=W;c.height=H});
+  const iw=innerWidth,ih=innerHeight,fit=goggle?GOG_FIT:1;
+  EW=goggle?Math.floor(iw/2):iw;EH=ih;
+  W=EW;H=EH;                                   // camera video + object markers: the whole (eye) view
+  let w=Math.floor(EW*fit),h=Math.floor(w*9/16);   // HUD (header, log, centre UI): a 16:9 area in the middle
+  if(h>EH*fit){h=Math.floor(EH*fit);w=Math.floor(h*16/9)}
+  HW=w;HH=h;
+  cv.width=W;cv.height=H;hc.width=HW;hc.height=HH;
+  $('gl').width=goggle?EW*2:W;$('gl').height=EH;
+  [fc,oc,scc,ec].forEach(c=>{c.width=W;c.height=H});
 }
 addEventListener('resize',resize);resize();
 
@@ -141,7 +147,7 @@ function updateRelief(now){
 }
 
 // ---- centre UI: shape never changes; low-opacity cyan fills in bright from both sides as p goes 0 -> 1 ----
-function drawCenterUI(p,a){const ctx=hctx;
+function drawCenterUI(p,a){const ctx=hctx,W=HW,H=HH;
   const cx=W/2,cy=H/2,R=Math.min(H*.082,W*.14),r=R*.41,hs=55*Math.PI/180,col='rgb(70,222,235)';
   const path=()=>{
     ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
@@ -219,7 +225,7 @@ function render(now){
     }
   }
   centerUI(now);drawHud(now);
-  if(!gl)ctx.drawImage(hc,0,0);
+  if(!gl)ctx.drawImage(hc,(W-HW)>>1,(H-HH)>>1);
   glDraw();
   requestAnimationFrame(render);
 }
@@ -228,8 +234,10 @@ function startLoops(){if(started)return;started=true;requestAnimationFrame(rende
 
 // ---- WebGL pass: pincushion + chromatic aberration; goggle mode renders side-by-side stereo with per-layer disparity ----
 const VS='attribute vec2 p;varying vec2 v;void main(){v=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
-const FS=`precision highp float;varying vec2 v;uniform sampler2D tv,to,th;uniform vec2 sc,vd;uniform float K,C,eye,dw,dh,sp,vg;
+const FS=`precision highp float;varying vec2 v;uniform sampler2D tv,to,th;uniform vec2 sc,vd,hs;uniform float K,C,eye,dw,dh,sp,vg;
 vec2 vuv(vec2 u){float k=max(sc.x/vd.x,sc.y/vd.y);vec2 sz=vd*k;return (u*sc-(sc-sz)*.5)/sz;}
+vec2 hq(vec2 u){return (u-.5)*hs+.5;}
+float inb(vec2 u){return step(0.,u.x)*step(u.x,1.)*step(0.,u.y)*step(u.y,1.);}
 void main(){
   vec2 p=v*2.-1.;float r2=dot(p,p);vec2 d=p*(1.-K*r2);
   vec2 q=d*.5+.5,qr=d*(1.+C*r2)*.5+.5,qb=d*(1.-C*r2)*.5+.5;
@@ -238,7 +246,7 @@ void main(){
   col*=.55;col=(col-.5)*1.1+.5;float gr=dot(col,vec3(.3,.59,.11));col=mix(vec3(gr),col,.85);
   vec4 a=texture2D(to,qr+o2),b=texture2D(to,q+o2),c=texture2D(to,qb+o2);
   col=vec3(col.r*(1.-a.a)+a.r,col.g*(1.-b.a)+b.g,col.b*(1.-c.a)+c.b);
-  a=texture2D(th,qr+o3);b=texture2D(th,q+o3);c=texture2D(th,qb+o3);
+  vec2 h1=hq(qr+o3),h2=hq(q+o3),h3=hq(qb+o3);a=texture2D(th,h1)*inb(h1);b=texture2D(th,h2)*inb(h2);c=texture2D(th,h3)*inb(h3);
   col=vec3(col.r*(1.-a.a)+a.r,col.g*(1.-b.a)+b.g,col.b*(1.-c.a)+c.b);
   col*=1.-vg*.55*smoothstep(.75,1.5,length(p));
   gl_FragColor=vec4(col,1.);
@@ -257,7 +265,7 @@ function initGL(){
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
       gl.uniform1i(gl.getUniformLocation(pr,n),i);
     });
-    ['sc','vd','K','C','eye','dw','dh','sp','vg'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
+    ['sc','vd','hs','K','C','eye','dw','dh','sp','vg'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
   }catch(e){gl=null;$('gl').style.display='none';video.style.opacity=1;cv.style.display='block'}
 }
@@ -271,8 +279,8 @@ function glDraw(){
   gl.uniform2f(U.sc,W,H);gl.uniform2f(U.vd,video.videoWidth||16,video.videoHeight||9);
   gl.uniform1f(U.K,goggle?GOG_K:LENS_K);gl.uniform1f(U.C,goggle?GOG_CA:CA);
   gl.uniform1f(U.dw,gDepth*.5);gl.uniform1f(U.dh,gDepth);gl.uniform1f(U.sp,gSep);gl.uniform1f(U.vg,goggle?1:0);
-  const eyes=goggle?[-1,1]:[0];
-  eyes.forEach((e,i)=>{gl.viewport(i*W,0,W,H);gl.uniform1f(U.eye,e);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)});
+  gl.uniform2f(U.hs,W/HW,H/HH);
+  (goggle?[-1,1]:[0]).forEach((e,i)=>{gl.viewport(i*EW,0,W,H);gl.uniform1f(U.eye,e);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)});
 }
 initGL();
 
