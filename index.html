@@ -21,7 +21,8 @@ padding:max(4vh,env(safe-area-inset-top)) 2.3vw 0;font-size:clamp(12px,1.5vw,40p
 #log div{animation:in .25s ease-out}
 #log .red{color:var(--red);text-shadow:0 0 8px rgba(255,26,26,.7)}
 @keyframes in{from{opacity:0;transform:translateX(-8px)}}
-#hint{position:fixed;right:2.3vw;bottom:max(3vh,env(safe-area-inset-bottom));display:flex;gap:10px}
+#hint{position:fixed;right:2.3vw;bottom:max(3vh,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+#hint .row{display:flex;gap:10px}
 #hint button{font:inherit;font-size:clamp(10px,1.4vw,16px);color:var(--c);background:rgba(0,20,30,.45);border:1px solid var(--c);padding:10px 14px;letter-spacing:.04em;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #hint button.on{background:rgba(0,212,255,.3);box-shadow:0 0 12px rgba(0,212,255,.7)}
 @media (prefers-reduced-motion:reduce){#log div{animation:none}}
@@ -32,7 +33,7 @@ padding:max(4vh,env(safe-area-inset-top)) 2.3vw 0;font-size:clamp(12px,1.5vw,40p
 <video id="v" playsinline muted autoplay></video>
 <canvas id="gl"></canvas><canvas id="cv"></canvas>
 <div class="fx"></div>
-<div id="hint"><button id="bp">PERSON [SPACE]</button><button id="bb">BOOK [B]</button><button id="bc">CAMERA [C]</button><button id="bg">GOGGLE [G]</button></div>
+<div id="hint"><div class="row"><button id="bp">PERSON [SPACE]</button><button id="bb">BOOK [B]</button><button id="bc">CAMERA [C]</button><button id="bg">GOGGLE [G]</button></div><div class="row"><button id="u1">UI −</button><button id="u2">UI +</button><button id="t1">TEXT −</button><button id="t2">TEXT +</button></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js" crossorigin="anonymous"></script>
 <script>
@@ -41,7 +42,7 @@ const video=$('v'),cv=$('cv'),ctx=cv.getContext('2d');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const mk=()=>document.createElement('canvas');
 const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContext('2d');  // silhouette(mask res), fill, outline, scan layer (screen res)
-let goggle=false,gDepth=.004,gSep=0,EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
+let goggle=false,gDepth=.004,gSep=0,uiS=1,txS=1,EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
 const LENS_K=0.10,CA=0.025,GOG_K=0,GOG_CA=0.012,GOG_FIT=.92;   // GOG_FIT: size of the 16:9 UI area inside each eye view (1 = as large as fits)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
@@ -50,18 +51,28 @@ const CYAN='0,212,255';
 const logs=[];
 function log(t,red){logs.push({t:'[System] '+t,red,b:performance.now()});if(logs.length>13)logs.shift()}
 try{document.fonts.load("500 20px Orbitron");document.fonts.load("400 20px 'Exo 2'")}catch(e){}
-try{const o=JSON.parse(localStorage.getItem('ss')||'{}');if(o.gDepth!=null)gDepth=o.gDepth;if(o.gSep!=null)gSep=o.gSep}catch(e){}
-function drawHud(now){      // header + log; in goggle mode: bigger text and pulled away from the lens edge
-  const W=HW,H=HH,c=hctx,g=goggle,k=g?1.6:1,fs=Math.max(12,W*.015*k),lf=Math.max(11,W*.011*k),lh=lf*1.75;
-  const px=W*(g?.04:.023),top=H*(g?.07:.04),bot=H*(g?.07:.03);
-  c.save();c.shadowColor='rgba(0,212,255,.7)';c.shadowBlur=10;c.fillStyle=`rgb(${CYAN})`;
-  c.font=`500 ${fs}px Orbitron,'Segoe UI',sans-serif`;c.textBaseline='top';
-  c.textAlign='left';c.fillText('SEARCH SYSTEM',px,top);
+try{const o=JSON.parse(localStorage.getItem('ss')||'{}');if(o.gDepth!=null)gDepth=o.gDepth;if(o.gSep!=null)gSep=o.gSep;if(o.uiS!=null)uiS=o.uiS;if(o.txS!=null)txS=o.txS}catch(e){}
+function drawHud(now){      // header + log, laid out so that nothing overlaps whatever the UI / text size is
+  const W=HW,H=HH,c=hctx,g=goggle,k=g?1.6:1;
+  let fs=Math.max(12,W*.015*k)*txS,lf=Math.max(11,W*.011*k)*txS;
+  const px=W*(g?.04:.023),top=H*(g?.07:.04),bot=H*(g?.07:.03),room=W-2*px;
   const n=new Date(),p2=x=>String(x).padStart(2,'0');
-  c.textAlign='right';c.fillText(`${n.getFullYear()}.${p2(n.getMonth()+1)}.${p2(n.getDate())}  ${p2(n.getHours())}:${p2(n.getMinutes())}`,W-px,top);
-  c.textAlign='left';c.textBaseline='alphabetic';c.font=`400 ${lf}px 'Exo 2','Segoe UI',sans-serif`;
-  logs.forEach((l,i)=>{
-    const t=Math.min(1,(now-l.b)/250),y=H-bot-(logs.length-1-i)*lh;
+  const ds=`${n.getFullYear()}.${p2(n.getMonth()+1)}.${p2(n.getDate())}  ${p2(n.getHours())}:${p2(n.getMinutes())}`;
+  const HF=f=>`500 ${f}px Orbitron,'Segoe UI',sans-serif`,LF=f=>`400 ${f}px 'Exo 2','Segoe UI',sans-serif`;
+  c.save();
+  c.font=HF(fs);                                   // title and date must fit on one line
+  const need=c.measureText('SEARCH SYSTEM').width+c.measureText(ds).width+fs*1.5;
+  if(need>room)fs=Math.max(6,fs*room/need);
+  c.font=LF(lf);                                   // every log line must fit the width
+  let mw=0;logs.forEach(l=>{mw=Math.max(mw,c.measureText(l.t).width)});
+  if(mw>room)lf=Math.max(6,lf*room/mw);
+  const lh=lf*1.75,free=H-bot-(top+fs*1.3)-lf;     // height left between the header and the bottom margin
+  const lines=logs.slice(logs.length-Math.max(0,Math.floor(free/lh)));   // keep only the newest lines that fit
+  c.shadowColor='rgba(0,212,255,.7)';c.shadowBlur=10;c.fillStyle=`rgb(${CYAN})`;c.textBaseline='top';
+  c.font=HF(fs);c.textAlign='left';c.fillText('SEARCH SYSTEM',px,top);c.textAlign='right';c.fillText(ds,W-px,top);
+  c.textAlign='left';c.textBaseline='alphabetic';c.font=LF(lf);
+  lines.forEach((l,i)=>{
+    const t=Math.min(1,(now-l.b)/250),y=H-bot-(lines.length-1-i)*lh;
     c.globalAlpha=t;c.fillStyle=l.red?'#ff1a1a':`rgb(${CYAN})`;c.shadowColor=l.red?'rgba(255,26,26,.7)':'rgba(0,212,255,.6)';
     c.fillText(l.t,px-(1-t)*8,y);
   });
@@ -71,9 +82,8 @@ function resize(){
   const iw=innerWidth,ih=innerHeight,fit=goggle?GOG_FIT:1;
   EW=goggle?Math.floor(iw/2):iw;EH=ih;
   W=EW;H=EH;                                   // camera video + object markers: the whole (eye) view
-  let w=Math.floor(EW*fit),h=Math.floor(w*9/16);   // HUD (header, log, centre UI): a 16:9 area in the middle
-  if(h>EH*fit){h=Math.floor(EH*fit);w=Math.floor(h*16/9)}
-  HW=w;HH=h;
+  const base=Math.min(EW,EH*16/9)*fit*uiS;     // HUD (header, log, centre UI): a 16:9 area in the middle, scaled by uiS
+  HW=Math.max(64,Math.floor(base));HH=Math.max(36,Math.floor(HW*9/16));
   cv.width=W;cv.height=H;hc.width=HW;hc.height=HH;
   $('gl').width=goggle?EW*2:W;$('gl').height=EH;
   [fc,oc,scc,ec].forEach(c=>{c.width=W;c.height=H});
@@ -178,14 +188,14 @@ function centerUI(now){
 
 // ---- white square brackets + leader line + label (la: label opacity 0..1) ----
 function drawMarker(cx,cy,S,lab,a,la){
-  const x0=cx-S/2,y0=cy-S/2,x1=cx+S/2,y1=cy+S/2,ar=S*.11,u=Math.max(S,160)/255;
+  const x0=cx-S/2,y0=cy-S/2,x1=cx+S/2,y1=cy+S/2,ar=S*.11,u=Math.max(S,160)/255*uiS;
   ctx.save();ctx.globalAlpha=a;ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(2,2.5*u);ctx.shadowColor='#fff';ctx.shadowBlur=8;
   ctx.beginPath();
   [[x0,y0,1,1],[x1,y0,-1,1],[x1,y1,-1,-1],[x0,y1,1,-1]].forEach(([x,y,p,q])=>{ctx.moveTo(x+p*ar,y);ctx.lineTo(x,y);ctx.lineTo(x,y+q*ar)});
   ctx.stroke();
   if(la>0){
     ctx.globalAlpha=a*la;
-    const px=x1+203*u,ex=px+98*u,ey=cy-98*u,fs=Math.max(12,Math.min(40,28*u));
+    const px=x1+203*u,ex=px+98*u,ey=cy-98*u,fs=Math.max(12,Math.min(40,28*u))*txS;
     ctx.beginPath();ctx.moveTo(x1,cy);ctx.lineTo(px,cy);ctx.lineTo(ex,ey);ctx.stroke();
     ctx.font=`500 ${fs}px Orbitron,sans-serif`;ctx.fillStyle='#fff';
     const tw=ctx.measureText(lab).width;
@@ -381,6 +391,8 @@ addEventListener('keydown',e=>{
   else if(e.code==='KeyG')setGoggle(!goggle);
   else if(e.code==='BracketRight')adjust('depth',1);else if(e.code==='BracketLeft')adjust('depth',-1);
   else if(e.code==='Period')adjust('sep',1);else if(e.code==='Comma')adjust('sep',-1);
+  else if(e.code==='Minus')adjustSize('ui',-1);else if(e.code==='Equal')adjustSize('ui',1);
+  else if(e.code==='Digit9')adjustSize('text',-1);else if(e.code==='Digit0')adjustSize('text',1);
 });
 [['bp','person'],['bb','book']].forEach(([id,m])=>{
   const b=$(id);b.addEventListener('pointerdown',e=>{e.stopPropagation();press(m)});
@@ -391,9 +403,15 @@ function setGoggle(on){
   if(on){log('Goggle mode. Swipe up/down: UI depth, left/right: separation.');try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(e){}}
   else log('Goggle mode off.');
 }
+const saveS=()=>{try{localStorage.setItem('ss',JSON.stringify({gDepth,gSep,uiS,txS}))}catch(e){}};
+function adjustSize(k,d){
+  if(k==='ui'){uiS=Math.min(1.6,Math.max(.5,Math.round((uiS+d*.1)*10)/10));resize();log(`UI size ${Math.round(uiS*100)}%`)}
+  else{txS=Math.min(2,Math.max(.6,Math.round((txS+d*.1)*10)/10));log(`Text size ${Math.round(txS*100)}%`)}
+  saveS();
+}
 function adjust(k,d){
   if(k==='depth')gDepth=Math.min(.03,Math.max(0,gDepth+d*.001));else gSep=Math.min(.1,Math.max(-.1,gSep+d*.002));
-  try{localStorage.setItem('ss',JSON.stringify({gDepth,gSep}))}catch(e){}
+  saveS();
   log(k==='depth'?`UI depth ${Math.round(gDepth*1000)}`:`Separation ${Math.round(gSep*500)}`);
 }
 let sx=0,sy=0;
@@ -406,6 +424,7 @@ addEventListener('pointerup',e=>{
   else press('person');
 });
 $('bg').addEventListener('pointerdown',e=>{e.stopPropagation();setGoggle(!goggle)});
+[['u1','ui',-1],['u2','ui',1],['t1','text',-1],['t2','text',1]].forEach(([id,k,d])=>$(id).addEventListener('pointerdown',e=>{e.stopPropagation();adjustSize(k,d)}));
 
 
 // ---------- camera ----------
