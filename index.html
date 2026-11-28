@@ -45,7 +45,7 @@ const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContex
 let goggle=false,gDepth=.004,gSep=0,uiS=1,txS=1,failOn=false,blkT=0,blocks=[],lagOn=true,lagX=0,lagY=0,lastLag=0,pg=null,ftime=-1,EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
-const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=0,LAG_TAU=.22,LAG_GAIN=.5,LAG_MAX=.06,GOG_FIT=.92;   // GOG_FIT: how close the HUD corners go to the eye-view corners (1 = as close as possible)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
+const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=0,LAG_TAU=.22,LAG_GAIN=.5,LAG_MAX=.06,LAG_Y_SIGN=1,GOG_FIT=.92;   // GOG_FIT: how close the HUD corners go to the eye-view corners (1 = as close as possible)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
 const CYAN='0,212,255';
 
 const logs=[];
@@ -386,7 +386,7 @@ function glDraw(){
   gl.uniform1f(U.K,goggle?GOG_K:LENS_K);gl.uniform1f(U.C,goggle?GOG_CA:CA);
   gl.uniform1f(U.Kh,(goggle?GOG_K:LENS_K)*HUD_K_MUL);gl.uniform1f(U.Cu,(goggle?GOG_CA:CA)*UI_CA_MUL);
   gl.uniform1f(U.dw,gDepth*.5);gl.uniform1f(U.dh,gDepth);gl.uniform1f(U.sp,gSep);gl.uniform1f(U.vg,goggle?1:0);
-  gl.uniform2f(U.hs,W/HW,H/HH);gl.uniform2f(U.lg,lagX/W,-lagY/H);gl.uniform1f(U.fail,failOn?1:0);gl.uniform1f(U.ft,(performance.now()/1000)%100);
+  gl.uniform2f(U.hs,W/HW,H/HH);gl.uniform2f(U.lg,lagX/W,LAG_Y_SIGN*lagY/H);gl.uniform1f(U.fail,failOn?1:0);gl.uniform1f(U.ft,(performance.now()/1000)%100);
   (goggle?[-1,1]:[0]).forEach((e,i)=>{gl.viewport(i*EW,0,W,H);gl.uniform1f(U.eye,e);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)});
 }
 initGL();
