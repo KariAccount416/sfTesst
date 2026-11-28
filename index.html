@@ -45,7 +45,7 @@ const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContex
 let goggle=false,gDepth=.004,gSep=0,uiS=1,txS=1,failOn=false,blkT=0,blocks=[],EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
-const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=2.5,GOG_FIT=.92;   // GOG_FIT: size of the 16:9 UI area inside each eye view (1 = as large as fits)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
+const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=0.25,GOG_FIT=.92;   // GOG_FIT: how close the HUD corners go to the eye-view corners (1 = as close as possible)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
 const CYAN='0,212,255';
 
 const logs=[];
@@ -88,9 +88,8 @@ function resize(){
   const iw=innerWidth,ih=innerHeight,fit=goggle?GOG_FIT:1;
   EW=goggle?Math.floor(iw/2):iw;EH=ih;
   W=EW;H=EH;                                   // camera video + object markers: the whole (eye) view
-  const b0=Math.min(EW,EH*16/9)*fit,t=warpFit(b0/EW,b0*9/16/EH,(goggle?GOG_K:LENS_K)*HUD_K_MUL);
-  const base=b0*t*uiS;     // HUD (header, log, centre UI): a 16:9 area in the middle, scaled by uiS
-  HW=Math.max(64,Math.floor(base));HH=Math.max(36,Math.floor(HW*9/16));
+  const t=warpFit(fit,fit,(goggle?GOG_K:LENS_K)*HUD_K_MUL);   // after the lens warp the HUD corners land just inside the eye view's corners
+  HW=Math.max(64,Math.floor(EW*fit*t*uiS));HH=Math.max(36,Math.floor(EH*fit*t*uiS));
   cv.width=W;cv.height=H;hc.width=HW;hc.height=HH;
   $('gl').width=goggle?EW*2:W;$('gl').height=EH;
   [fc,oc,scc,ec].forEach(c=>{c.width=W;c.height=H});
@@ -165,7 +164,7 @@ function updateRelief(now){
 
 // ---- centre UI: shape never changes; low-opacity cyan fills in bright from both sides as p goes 0 -> 1 ----
 function drawCenterUI(p,a){const ctx=hctx,W=HW,H=HH;
-  const cx=W/2,cy=H/2,R=Math.min(H*.082,W*.14),r=R*.41,hs=55*Math.PI/180,col='rgb(70,222,235)';
+  const cx=W/2,cy=H/2,R=Math.min(Math.min(W,H*16/9)*9/16*.082,Math.min(W,H*16/9)*.14),r=R*.41,hs=55*Math.PI/180,col='rgb(70,222,235)';
   const path=()=>{
     ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
     ctx.moveTo(cx-r*Math.cos(hs),cy+r*Math.sin(hs));ctx.arc(cx,cy,r,Math.PI-hs,Math.PI+hs);
@@ -245,7 +244,7 @@ function drawBlocks(now){
   ctx.restore();
 }
 function drawWarning(now){
-  const c=hctx,W=HW,H=HH,cx=W/2,cy=H/2;
+  const c=hctx,cx=HW/2,cy=HH/2,W=Math.min(HW,HH*16/9);
   let f1=W*.058*txS,f2=W*.034*txS;
   const F=f=>`500 ${f}px Orbitron,'Segoe UI',sans-serif`,T2='YOU WERE SEEN SCANNING';
   c.save();c.font=F(f1);
