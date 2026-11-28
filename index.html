@@ -45,7 +45,7 @@ const sc=mk(),fc=mk(),oc=mk(),scc=mk(),ec=mk(),rc=mk(),hc=mk(),hctx=hc.getContex
 let goggle=false,gDepth=.004,gSep=0,uiS=1,txS=1,failOn=false,blkT=0,blocks=[],EW=0,EH=0,HW=0,HH=0,W=0,H=0,state=0,mode='none',books=[],cocoModel=null,loading=false; // state: 0 boot, 1 ready, 2 scanning
 let bbox=null,rect=null,scanT0=0,busy=false,seg=null,ready=false;
 let scanEndT=0,cardT0=0,labelT0=0,cardCur=null,lastRel=0,rf=0,lastPerson=0,cuVis=false,cuT0=0,scanned=false;
-const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=0.25,GOG_FIT=.92;   // GOG_FIT: how close the HUD corners go to the eye-view corners (1 = as close as possible)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
+const LENS_K=0.10,CA=0.025,GOG_K=0.10,GOG_CA=0.025,HUD_K_MUL=1.5,UI_CA_MUL=0,GOG_FIT=.92;   // GOG_FIT: how close the HUD corners go to the eye-view corners (1 = as close as possible)   // GOG_*: values used in goggle mode (lenses add their own distortion)   // pincushion strength / chromatic aberration (both grow toward the screen edge)
 const CYAN='0,212,255';
 
 const logs=[];
@@ -267,7 +267,7 @@ function render(now){
     if(cardT0&&state!==2&&now-lastPerson>600){cardT0=labelT0=0;cardCur=null;scanEndT=0}   // person left the camera
     if(state>=1&&bbox){
       ctx.save();ctx.shadowColor=`rgb(${CYAN})`;ctx.shadowBlur=12;ctx.drawImage(oc,0,0);ctx.restore();
-      if(state===2||cardT0)drawPersonScan(now);else if(!scanned)reticle();
+      if(state===2||cardT0)drawPersonScan(now);
     }
   }
   centerUI(now);drawHud(now);if(failOn){drawBlocks(now);drawWarning(now)}
@@ -362,7 +362,7 @@ function pickTarget(){
   if(!books.length)return;
   let best=null,bd=1e9;
   books.forEach(b=>{const d=Math.hypot(b.x+b.w/2-W/2,b.y+b.h/2-H/2);if(d<bd){bd=d;best=b}});
-  tgtRaw={cx:best.x+best.w/2,cy:best.y+best.h/2,S:Math.max(48,Math.max(best.w,best.h)*1.2)};lastSeen=performance.now();
+  tgtRaw={cx:best.x+best.w/2,cy:best.y+best.h/2,S:H*.14};lastSeen=performance.now();
 }
 const hasTarget=()=>tgtRaw&&performance.now()-lastSeen<600;
 function drawBooks(now){
@@ -370,9 +370,10 @@ function drawBooks(now){
   if(!cur)cur={...tgtRaw};else for(const k in tgtRaw)cur[k]+=(tgtRaw[k]-cur[k])*.35;
   const {cx,cy,S}=cur,x0=cx-S/2,y0=cy-S/2;
   drawMarker(cx,cy,S,'MISSION TARGET',1,1);
-  if(state===2){
+  const fa=scanEndT?Math.max(0,1-(now-scanEndT)/300):1;      // scan line reached the bottom -> fade out right away
+  if(state===2&&fa>0){
     const y=y0+S*scanP(now);
-    ctx.save();ctx.beginPath();ctx.rect(x0,y0,S,S);ctx.clip();
+    ctx.save();ctx.globalAlpha=fa;ctx.beginPath();ctx.rect(x0,y0,S,S);ctx.clip();
     const g=ctx.createLinearGradient(0,y-30,0,y+30);
     g.addColorStop(0,'rgba(200,255,255,0)');g.addColorStop(.5,'rgba(200,255,255,.9)');g.addColorStop(1,'rgba(200,255,255,0)');
     ctx.fillStyle=g;ctx.fillRect(x0,y-30,S,60);ctx.restore();
